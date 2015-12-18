@@ -23,9 +23,9 @@ from ryu.lib.packet.bgp import BGPPathAttributeMultiExitDisc
 from ryu.lib.packet.bgp import BGPPathAttributeNextHop
 from ryu.lib.packet.bgp import BGPPathAttributeCommunities
 
-import utils
-import gobgp_pb2 as api
-import logger
+from lib import logger
+from lib import utils
+from api import gobgp_pb2 as api
 
 
 class OpsHandler():

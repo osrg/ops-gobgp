@@ -22,9 +22,9 @@ from ovs.unixctl.client import *
 from ovs import poller
 from six.moves import queue as Queue
 
-import utils
 import handle
-import logger
+from lib import logger
+from lib import utils
 
 
 AFI_IP = 1

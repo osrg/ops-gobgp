@@ -15,8 +15,7 @@
 
 from optparse import OptionParser
 
-import logger
-
+from lib import logger
 from connection import Connection
 
 
