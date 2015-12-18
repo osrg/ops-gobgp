@@ -82,20 +82,18 @@ class OpsConnection(object):
             logger.log.info('Connecting to OpenSwitch...')
             try:
                 helper = utils.get_schema_helper(self.ovsdb, self.schema_name)
-            except Exception:
-                def do_get_schema_helper():
-                    return utils.get_schema_helper(self.ovsdb, self.schema_name)
-                helper = do_get_schema_helper()
-            logger.log.info('Connected...')
-            helper.register_all()
-            self.idl = idl.Idl(self.ovsdb, helper)
-            utils.wait_for_change(self.idl, self.timeout)
-            self.poller = poller.Poller()
+                logger.log.info('Connected...')
+                helper.register_all()
+                self.idl = idl.Idl(self.ovsdb, helper)
+                utils.wait_for_change(self.idl, self.timeout)
+                self.poller = poller.Poller()
 
-            self.o_hdr = handle.OpsHandler(self.idl)
+                self.o_hdr = handle.OpsHandler(self.idl)
 
-            self.th = threading.Thread(target=self.run_ops_to_gogbp)
-            self.th.setDaemon(True)
+                self.th = threading.Thread(target=self.run_ops_to_gogbp)
+                self.th.setDaemon(True)
+            except Exception as e:
+                logger.log.error('Exception: {0}'.format(e))
 
     def start(self):
         logger.log.info('run run_ops_to_gogbp thread...')
@@ -105,11 +103,11 @@ class OpsConnection(object):
     def run_ops_to_gogbp(self):
         first_time = True
         while True:
+            self.idl.txn = None
             self.idl.wait(self.poller)
             self.poller.fd_wait(self.txns.alert_fileno, poller.POLLIN)
             if not first_time:
                 self.poller.block()
-            self.idl.txn = None
             self.idl.run()
 
             self.o_hdr.handle_update()
@@ -149,11 +147,11 @@ class GobgpConnection():
         return self.th
 
     def run_gobgp_to_ops(self):
-        time.sleep(1)
         while True:
             logger.log.info('Wait for a change the bestpath from gobgp...')
             monitor_argument = {'rf': RF_IPv4_UC}
             self.g_hdr.monitor_bestpath_chenged(monitor_argument)
+            time.sleep(3)
         logger.log.info('run_ops_to_gogbp thread is end')
 
 

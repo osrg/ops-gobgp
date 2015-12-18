@@ -190,24 +190,37 @@ class OpsHandler():
         return neighbor_dict
 
     def mod_bgp_path(self, bgp_path):
+        operation = None
+        self.idl.txn = None
         while True:
             txn = idl.Transaction(self.idl)
+            if bgp_path['is_withdraw']:
+                operation = 'del'
+                rows = self.idl.tables['BGP_Route'].rows.values()
+                for row in rows:
+                    if utils.get_column_value(row, 'prefix') == bgp_path['prefix']:
+                        operation = 'del'
+                        prefix_uuid = utils.get_column_value(row, '_uuid')
+                        self.idl.tables['BGP_Route'].rows[prefix_uuid].delete()
 
-            row_nh = txn.insert(self.idl.tables['BGP_Nexthop'])
-            row_nh.ip_address = bgp_path['nexthop']
-            row_nh.type = 'unicast'
+            else:
+                operation = 'add'
+                row_nh = utils.row_by_value(self.idl, 'BGP_Nexthop', 'ip_address', bgp_path['nexthop'])
+                if not row_nh:
+                    row_nh = txn.insert(self.idl.tables['BGP_Nexthop'])
+                    row_nh.ip_address = bgp_path['nexthop']
+                    row_nh.type = 'unicast'
 
-            row_path = txn.insert(self.idl.tables['BGP_Route'])
-            row_path.address_family = 'ipv4'
-            row_path.bgp_nexthops = row_nh
-            row_path.distance = []
-            row_path.metric = 0
-            row_path.path_attributes = bgp_path['bgp_pathattr']
-            # row_path.path_attributes = bgp_pathattr
-            row_path.peer = 'Remote announcement'
-            row_path.prefix = bgp_path['prefix']
-            row_path.sub_address_family = 'unicast'
-            row_path.vrf = self.idl.tables['VRF'].rows.values()[0]
+                row_path = txn.insert(self.idl.tables['BGP_Route'])
+                row_path.address_family = 'ipv4'
+                row_path.bgp_nexthops = row_nh
+                row_path.distance = []
+                row_path.metric = 0
+                row_path.path_attributes = bgp_path['bgp_pathattr']
+                row_path.peer = 'Remote announcement'
+                row_path.prefix = bgp_path['prefix']
+                row_path.sub_address_family = 'unicast'
+                row_path.vrf = self.idl.tables['VRF'].rows.values()[0]
 
             status = txn.commit_block()
             seqno = self.idl.change_seqno
@@ -224,9 +237,12 @@ class OpsHandler():
             elif status == txn.UNCHANGED:
                 logger.log.error("Transaction caused no change")
 
-            self.idl.txn = None
             break
-        logger.log.debug('Send bgp route to ops: type=add, prefix={0}'.format(bgp_path['prefix']))
+
+        if operation is None:
+            logger.log.warn('route is not exist in ops: prefix={0}'.format(bgp_path['prefix']))
+        else:
+            logger.log.debug('Send bgp route to ops: type={0}, prefix={1}'.format(operation, bgp_path['prefix']))
 
 
 def grpc_request(f):
@@ -258,7 +274,8 @@ class GobgpHandler():
             response = stub.ModGlobalConfig(
                 api.ModGlobalConfigArguments(**arguments),
                 self.timeout)
-        logger.log.debug('grpc response: {0}'.format(response))
+        if response:
+            logger.log.debug('grpc response: {0}'.format(response))
 
     @grpc_request
     def mod_neighbor_config(self, arguments):
@@ -266,7 +283,8 @@ class GobgpHandler():
             response = stub.ModNeighbor(
                 api.ModNeighborArguments(**arguments),
                 self.timeout)
-        logger.log.debug('grpc response: {0}'.format(response))
+        if response:
+            logger.log.debug('grpc response: {0}'.format(response))
 
     @grpc_request
     def monitor_bestpath_chenged(self, arguments):
@@ -285,7 +303,7 @@ class GobgpHandler():
                                     'BGP_iBGP': '',
                                     'BGP_flags': '',
                                     'BGP_internal': '',
-                                    'BGP_loc_pref': '10'}
+                                    'BGP_loc_pref': '0'}
                     for pattr in path.pattrs:
                         path_attr = _PathAttribute.parser(pattr)
                         if isinstance(path_attr[0], BGPPathAttributeOrigin):
@@ -296,11 +314,9 @@ class GobgpHandler():
                                 bgp_pathattr['BGP_origin'] = 'e'
                             else:
                                 bgp_pathattr['BGP_origin'] = '?'
-                            logger.log.error(origin)
                         elif isinstance(path_attr[0], BGPPathAttributeAsPath):
                             if path_attr[0].type == 2:
                                 bgp_pathattr['BGP_AS_path'] = '{0}'.format(path_attr[0].value[0][0])
-                                pass
                         elif isinstance(path_attr[0], BGPPathAttributeMultiExitDisc):
                             bgp_path['metric'] = path_attr[0].value
                         elif isinstance(path_attr[0], BGPPathAttributeNextHop):

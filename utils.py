@@ -42,20 +42,13 @@ def get_schema_helper(connection, schema_name):
     return idl.SchemaHelper(None, resp.result)
 
 
-def row_not_found(**kwargs):
-    rows = kwargs['rows']
-    col = kwargs['col']
-    message = 'Cannot find {0} in {1}'.format(col, rows)
-    return message
-
-
 def row_by_value(idl_, table, column, match):
-    """Lookup an IDL row in a table by column/value"""
     tab = idl_.tables[table]
-    for r in tab.rows.values():
-        if getattr(r, column) == match:
-            return r
-    raise row_not_found(table=table, col=column, match=match)
+    if tab.rows is not None:
+        for r in tab.rows.values():
+            if getattr(r, column) == match:
+                return r
+    return None
 
 
 def get_column_value(row, col):
