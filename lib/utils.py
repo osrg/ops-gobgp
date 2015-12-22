@@ -5,6 +5,12 @@ from ovs.db import idl
 from ovs import jsonrpc, poller, stream
 
 
+class ExceptionResult(object):
+    def __init__(self, ex, tb):
+        self.ex = ex
+        self.tb = tb
+
+
 def receive_signal(signum, stack):
     print('signal received:%d' % signum)
     print('exit')

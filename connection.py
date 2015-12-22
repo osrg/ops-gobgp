@@ -34,12 +34,6 @@ SAFI_UNICAST = 1
 RF_IPv4_UC = AFI_IP<<16 | SAFI_UNICAST
 
 
-class ExceptionResult(object):
-    def __init__(self, ex, tb):
-        self.ex = ex
-        self.tb = tb
-
-
 class TransactionQueue(Queue.Queue, object):
     def __init__(self, *args, **kwargs):
         super(TransactionQueue, self).__init__(*args, **kwargs)
@@ -92,7 +86,6 @@ class OpsConnection(object):
                 logger.log.info('Connecting to OpenSwitch...')
                 try:
                     helper = utils.get_schema_helper(self.ovsdb, self.schema_name)
-                    logger.log.info('Connected...')
                     helper.register_all()
                     self.idl = idl.Idl(self.ovsdb, helper)
                     utils.wait_for_change(self.idl, self.timeout)
@@ -102,16 +95,15 @@ class OpsConnection(object):
 
                     self.th = threading.Thread(target=self.run_ops_to_gogbp)
                     self.th.setDaemon(True)
-
+                    logger.log.info('Connected')
                     connected = True
                 except Exception as e:
-                    logger.log.error('faild to connect')
-                    logger.log.debug('Exception: {0}'.format(e))
+                    logger.log.error('Faild to connect: {0}'.format(e))
                     time.sleep(self.wait_time)
                     retry += 1
 
     def start(self):
-        logger.log.info('run run_ops_to_gogbp thread...')
+        logger.log.info('Run run_ops_to_gogbp thread...')
         self.th.start()
         return self.th
 
@@ -123,6 +115,8 @@ class OpsConnection(object):
             self.poller.fd_wait(self.txns.alert_fileno, poller.POLLIN)
             if not first_time:
                 self.poller.block()
+            if self.idl.txn:
+                self.idl.txn = None
             self.idl.run()
 
             self.o_hdr.handle_update()
@@ -132,7 +126,7 @@ class OpsConnection(object):
                 try:
                     txn.results.put(txn.do_commit())
                 except Exception as ex:
-                    er = ExceptionResult(ex=ex, tb=traceback.format_exc())
+                    er = utils.ExceptionResult(ex=ex, tb=traceback.format_exc())
                     txn.results.put(er)
                 self.txns.task_done()
             first_time = False
@@ -167,10 +161,11 @@ class GobgpConnection():
                 s.connect((self.gobgp_url, self.gobgp_port))
                 s.close()
                 g_conn = api.beta_create_GobgpApi_stub(self.channel)
+
+                logger.log.info('Connected')
                 connected = True
             except Exception as e:
-                logger.log.error('faild to connect')
-                logger.log.debug('Exception: {0}'.format(e))
+                logger.log.error('Faild to connect: {0}'.format(e))
                 time.sleep(self.wait_time)
                 retry += 1
 
@@ -180,7 +175,7 @@ class GobgpConnection():
         self.th.setDaemon(True)
 
     def start(self):
-        logger.log.info('run run_gogbp_to_ops thread...')
+        logger.log.info('Run run_gogbp_to_ops thread...')
         self.th.start()
         return self.th
 
