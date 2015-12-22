@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import time
 import signal
 import threading
@@ -68,6 +69,8 @@ class OpsConnection(object):
         self.idl = None
         self.ovsdb = ovsdb
         self.timeout = 5
+        self.retry_limit = 10
+        self.wait_time = 3
         self.txns = TransactionQueue(1)
         self.lock = threading.Lock()
         self.schema_name = "OpenSwitch"
@@ -76,24 +79,33 @@ class OpsConnection(object):
         return self.o_hdr
 
     def connect(self):
-        with self.lock:
-            if self.idl is not None:
-                return
-            logger.log.info('Connecting to OpenSwitch...')
-            try:
-                helper = utils.get_schema_helper(self.ovsdb, self.schema_name)
-                logger.log.info('Connected...')
-                helper.register_all()
-                self.idl = idl.Idl(self.ovsdb, helper)
-                utils.wait_for_change(self.idl, self.timeout)
-                self.poller = poller.Poller()
+        connected = False
+        retry = 0
+        while not connected:
+            if retry >= self.retry_limit:
+                os._exit(1)
 
-                self.o_hdr = handle.OpsHandler(self.idl)
+            with self.lock:
+                if self.idl is not None:
+                    return
+                logger.log.info('Connecting to OpenSwitch...')
+                try:
+                    helper = utils.get_schema_helper(self.ovsdb, self.schema_name)
+                    logger.log.info('Connected...')
+                    helper.register_all()
+                    self.idl = idl.Idl(self.ovsdb, helper)
+                    utils.wait_for_change(self.idl, self.timeout)
+                    self.poller = poller.Poller()
 
-                self.th = threading.Thread(target=self.run_ops_to_gogbp)
-                self.th.setDaemon(True)
-            except Exception as e:
-                logger.log.error('Exception: {0}'.format(e))
+                    self.o_hdr = handle.OpsHandler(self.idl)
+
+                    self.th = threading.Thread(target=self.run_ops_to_gogbp)
+                    self.th.setDaemon(True)
+                except Exception as e:
+                    logger.log.error('faild to connect')
+                    logger.log.debug('Exception: {0}'.format(e))
+                    time.sleep(self.wait_time)
+                    retry += 1
 
     def start(self):
         logger.log.info('run run_ops_to_gogbp thread...')
