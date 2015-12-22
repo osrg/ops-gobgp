@@ -33,7 +33,7 @@ def main():
                            ' - tcp:<address>:<port>')
     parser.add_option('-l', '--log-level', dest='log_level', default='info',
                       help='specifying a log level')
-    parser.add_option('-f', '--log-file', dest='log_file', default='./openswitch.log',
+    parser.add_option('-f', '--log-file', dest='log_file', default=None,
                       help='specifying the output destination of the log file')
 
     (options, args) = parser.parse_args()

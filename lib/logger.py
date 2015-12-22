@@ -40,10 +40,10 @@ def logger(log_level, log_file):
         sys.exit(1)
 
     formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-    if log_file == '' or log_file == 'stdout':
+    if log_file is None:
         h = logging.StreamHandler()
     else:
-        h = logging.FileHandler(file, 'a+', 'utf-8')
+        h = logging.FileHandler(log_file, 'a+', 'utf-8')
     h.setFormatter(formatter)
     logger.addHandler(h)
 
