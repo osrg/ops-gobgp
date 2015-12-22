@@ -26,7 +26,7 @@ def main():
                       help='specifying an url')
     parser.add_option('-p', '--gobgp-port', dest='gobgp_port', default=8080,
                       help='specifying a port')
-    parser.add_option('-o', '--ovsdb-sock', dest='ovsdb', default='unix:/var/opsrun/openvswitch/db.sock',
+    parser.add_option('-o', '--ovsdb-sock', dest='ovsdb', default='unix:/var/run/openvswitch/db.sock',
                       help='specifying the connection destination of the ovsdb    '
                            'Example                                               '
                            ' - unix:<socket file path>                            '
