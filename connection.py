@@ -13,20 +13,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import time
 import signal
+import socket
 import threading
 import traceback
 from ovs.db import idl
 from ovs.unixctl.client import *
 from ovs import poller
 from six.moves import queue as Queue
+from grpc.beta import implementations
 
 import handle
 from lib import logger
 from lib import utils
-
+from api import gobgp_pb2 as api
 
 AFI_IP = 1
 SAFI_UNICAST = 1
@@ -69,7 +70,7 @@ class OpsConnection(object):
         self.idl = None
         self.ovsdb = ovsdb
         self.timeout = 5
-        self.retry_limit = 10
+        self.retry_limit = 5
         self.wait_time = 3
         self.txns = TransactionQueue(1)
         self.lock = threading.Lock()
@@ -101,6 +102,8 @@ class OpsConnection(object):
 
                     self.th = threading.Thread(target=self.run_ops_to_gogbp)
                     self.th.setDaemon(True)
+
+                    connected = True
                 except Exception as e:
                     logger.log.error('faild to connect')
                     logger.log.debug('Exception: {0}'.format(e))
@@ -141,14 +144,37 @@ class OpsConnection(object):
 
 class GobgpConnection():
     def __init__(self, gobgp_url, gobgp_port):
-        self.url = gobgp_url
-        self.port = gobgp_port
+        self.gobgp_url = gobgp_url
+        self.gobgp_port = gobgp_port
+        self.channel = implementations.insecure_channel(gobgp_url, gobgp_port)
+        self.wait_time = 3
+        self.retry_limit = 5
 
     def get_handler(self):
         return self.g_hdr
 
     def connect(self):
-        self.g_hdr = handle.GobgpHandler(self.url, self.port)
+        g_conn = None
+        connected = False
+        retry = 0
+        if retry >= self.retry_limit:
+            os._exit(1)
+
+        while not connected:
+            logger.log.info('Connecting to Gobgp...')
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.connect((self.gobgp_url, self.gobgp_port))
+                s.close()
+                g_conn = api.beta_create_GobgpApi_stub(self.channel)
+                connected = True
+            except Exception as e:
+                logger.log.error('faild to connect')
+                logger.log.debug('Exception: {0}'.format(e))
+                time.sleep(self.wait_time)
+                retry += 1
+
+        self.g_hdr = handle.GobgpHandler(g_conn)
 
         self.th = threading.Thread(target=self.run_gobgp_to_ops)
         self.th.setDaemon(True)

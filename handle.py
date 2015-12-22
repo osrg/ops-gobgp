@@ -14,7 +14,6 @@
 # limitations under the License.
 
 from ovs.db import idl
-from grpc.beta import implementations
 from ryu.lib.packet.bgp import IPAddrPrefix
 from ryu.lib.packet.bgp import _PathAttribute
 from ryu.lib.packet.bgp import BGPPathAttributeOrigin
@@ -258,20 +257,17 @@ def grpc_request(f):
 
 
 class GobgpHandler():
-    def __init__(self, addr, port):
-        self.gobgpd_addr = addr
-        self.gobgpd_port = port
+    def __init__(self, g_conn):
+        self.g_conn = g_conn
         self.timeout = 3
         self.monitor_timeout = 1000
-        self.channel = implementations.insecure_channel(self.gobgpd_addr, self.gobgpd_port)
 
     def set_handler(self, ops_handler):
         self.o_hdr = ops_handler
 
     @grpc_request
     def mod_global_config(self, arguments):
-        with api.beta_create_GobgpApi_stub(self.channel) as stub:
-            response = stub.ModGlobalConfig(
+        response = self.g_conn.ModGlobalConfig(
                 api.ModGlobalConfigArguments(**arguments),
                 self.timeout)
         if response:
@@ -279,53 +275,51 @@ class GobgpHandler():
 
     @grpc_request
     def mod_neighbor_config(self, arguments):
-        with api.beta_create_GobgpApi_stub(self.channel) as stub:
-            response = stub.ModNeighbor(
-                api.ModNeighborArguments(**arguments),
-                self.timeout)
+        response = self.g_conn.ModNeighbor(
+            api.ModNeighborArguments(**arguments),
+            self.timeout)
         if response:
             logger.log.debug('grpc response: {0}'.format(response))
 
     @grpc_request
     def monitor_bestpath_chenged(self, arguments):
-        with api.beta_create_GobgpApi_stub(self.channel) as stub:
-            ribs = stub.MonitorBestChanged(api.Arguments(**arguments),
-                self.monitor_timeout)
-            for rib in ribs:
-                for path in rib.paths:
-                    nlri = IPAddrPrefix.parser(path.nlri)
-                    prefix = nlri[0].prefix
-                    logger.log.debug('Recv bgp route from gobgp: prefix={0}, withdraw={1}'.format(prefix, path.is_withdraw))
-                    bgp_path = {'prefix': prefix,
-                                'metric': 0,
-                                'is_withdraw': path.is_withdraw}
-                    bgp_pathattr = {'BGP_uptime': '',
-                                    'BGP_iBGP': '',
-                                    'BGP_flags': '',
-                                    'BGP_internal': '',
-                                    'BGP_loc_pref': '0'}
-                    for pattr in path.pattrs:
-                        path_attr = _PathAttribute.parser(pattr)
-                        if isinstance(path_attr[0], BGPPathAttributeOrigin):
-                            origin = path_attr[0].value
-                            if origin == 0:
-                                bgp_pathattr['BGP_origin'] = 'i'
-                            elif origin == 1:
-                                bgp_pathattr['BGP_origin'] = 'e'
-                            else:
-                                bgp_pathattr['BGP_origin'] = '?'
-                        elif isinstance(path_attr[0], BGPPathAttributeAsPath):
-                            if path_attr[0].type == 2:
-                                bgp_pathattr['BGP_AS_path'] = '{0}'.format(path_attr[0].value[0][0])
-                        elif isinstance(path_attr[0], BGPPathAttributeMultiExitDisc):
-                            bgp_path['metric'] = path_attr[0].value
-                        elif isinstance(path_attr[0], BGPPathAttributeNextHop):
-                            bgp_path['nexthop'] = path_attr[0].value
-                        elif isinstance(path_attr[0], BGPPathAttributeCommunities):
-                            communities = []
-                            for community in path_attr[0].communities:
-                                communities.append(community)
-                            bgp_pathattr['BGP_Community'] = ','.join(communities)
-                    bgp_path['bgp_pathattr'] = bgp_pathattr
-                    bgp_path['is_withdraw'] = path.is_withdraw
-                    self.o_hdr.mod_bgp_path(bgp_path)
+        ribs = self.g_conn.MonitorBestChanged(api.Arguments(**arguments),
+            self.monitor_timeout)
+        for rib in ribs:
+            for path in rib.paths:
+                nlri = IPAddrPrefix.parser(path.nlri)
+                prefix = nlri[0].prefix
+                logger.log.debug('Recv bgp route from gobgp: prefix={0}, withdraw={1}'.format(prefix, path.is_withdraw))
+                bgp_path = {'prefix': prefix,
+                            'metric': 0,
+                            'is_withdraw': path.is_withdraw}
+                bgp_pathattr = {'BGP_uptime': '',
+                                'BGP_iBGP': '',
+                                'BGP_flags': '',
+                                'BGP_internal': '',
+                                'BGP_loc_pref': '0'}
+                for pattr in path.pattrs:
+                    path_attr = _PathAttribute.parser(pattr)
+                    if isinstance(path_attr[0], BGPPathAttributeOrigin):
+                        origin = path_attr[0].value
+                        if origin == 0:
+                            bgp_pathattr['BGP_origin'] = 'i'
+                        elif origin == 1:
+                            bgp_pathattr['BGP_origin'] = 'e'
+                        else:
+                            bgp_pathattr['BGP_origin'] = '?'
+                    elif isinstance(path_attr[0], BGPPathAttributeAsPath):
+                        if path_attr[0].type == 2:
+                            bgp_pathattr['BGP_AS_path'] = '{0}'.format(path_attr[0].value[0][0])
+                    elif isinstance(path_attr[0], BGPPathAttributeMultiExitDisc):
+                        bgp_path['metric'] = path_attr[0].value
+                    elif isinstance(path_attr[0], BGPPathAttributeNextHop):
+                        bgp_path['nexthop'] = path_attr[0].value
+                    elif isinstance(path_attr[0], BGPPathAttributeCommunities):
+                        communities = []
+                        for community in path_attr[0].communities:
+                            communities.append(community)
+                        bgp_pathattr['BGP_Community'] = ','.join(communities)
+                bgp_path['bgp_pathattr'] = bgp_pathattr
+                bgp_path['is_withdraw'] = path.is_withdraw
+                self.o_hdr.mod_bgp_path(bgp_path)
