@@ -5,6 +5,11 @@ from ovs.db import idl
 from ovs import jsonrpc, poller, stream
 
 
+AFI_IP = 1
+SAFI_UNICAST = 1
+RF_IPv4_UC = AFI_IP<<16 | SAFI_UNICAST
+
+
 class ExceptionResult(object):
     def __init__(self, ex, tb):
         self.ex = ex

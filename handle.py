@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import traceback
+
 from ovs.db import idl
 from ryu.lib.packet.bgp import IPAddrPrefix
 from ryu.lib.packet.bgp import _PathAttribute
@@ -25,14 +25,16 @@ from ryu.lib.packet.bgp import BGPPathAttributeCommunities
 
 from lib import logger
 from lib import utils
+from lib import transaction
 from api import gobgp_pb2 as api
 
 
 class OpsHandler():
-    def __init__(self, idl):
+    def __init__(self, idl, conn):
         self.router_id = None
         self.neighbors = []
         self.idl = idl
+        self.conn = conn
         self.timeout = 5
 
     def set_handler(self, gobgp_handler):
@@ -190,60 +192,62 @@ class OpsHandler():
         return neighbor_dict
 
     def mod_bgp_path(self, bgp_path):
-        operation = None
-        if self.idl.txn:
-            self.idl.txn = None
-        while True:
-            txn = idl.Transaction(self.idl)
-            if bgp_path['is_withdraw']:
-                operation = 'del'
-                rows = self.idl.tables['BGP_Route'].rows.values()
-                for row in rows:
-                    if utils.get_column_value(row, 'prefix') == bgp_path['prefix']:
-                        operation = 'del'
-                        prefix_uuid = utils.get_column_value(row, '_uuid')
-                        self.idl.tables['BGP_Route'].rows[prefix_uuid].delete()
+        def commit_f():
+            operation = None
+            while True:
+                txn = idl.Transaction(self.idl)
+                if bgp_path['is_withdraw']:
+                    operation = 'del'
+                    rows = self.idl.tables['BGP_Route'].rows.values()
+                    for row in rows:
+                        if utils.get_column_value(row, 'prefix') == bgp_path['prefix']:
+                            operation = 'del'
+                            prefix_uuid = utils.get_column_value(row, '_uuid')
+                            self.idl.tables['BGP_Route'].rows[prefix_uuid].delete()
 
+                else:
+                    operation = 'add'
+                    row_nh = utils.row_by_value(self.idl, 'BGP_Nexthop', 'ip_address', bgp_path['nexthop'])
+                    if not row_nh:
+                        row_nh = txn.insert(self.idl.tables['BGP_Nexthop'])
+                        row_nh.ip_address = bgp_path['nexthop']
+                        row_nh.type = 'unicast'
+
+                    row_path = txn.insert(self.idl.tables['BGP_Route'])
+                    row_path.address_family = 'ipv4'
+                    row_path.bgp_nexthops = row_nh
+                    row_path.distance = []
+                    row_path.metric = 0
+                    row_path.path_attributes = bgp_path['bgp_pathattr']
+                    row_path.peer = 'Remote announcement'
+                    row_path.prefix = bgp_path['prefix']
+                    row_path.sub_address_family = 'unicast'
+                    row_path.vrf = self.idl.tables['VRF'].rows.values()[0]
+
+                status = txn.commit_block()
+                seqno = self.idl.change_seqno
+                if status == txn.TRY_AGAIN:
+                    logger.log.error("OVSDB transaction returned TRY_AGAIN, retrying")
+                    utils.wait_for_change(
+                        self.idl, self.timeout, seqno)
+                    continue
+                elif status == txn.ERROR:
+                    logger.log.error("OVSDB transaction returned ERROR: {0}".format(txn.get_error()))
+                elif status == txn.ABORTED:
+                    logger.log.error("Transaction aborted")
+                    return
+                elif status == txn.UNCHANGED:
+                    logger.log.error("Transaction caused no change")
+
+                break
+
+            if operation is None:
+                logger.log.warn('route is not exist in ops: prefix={0}'.format(bgp_path['prefix']))
             else:
-                operation = 'add'
-                row_nh = utils.row_by_value(self.idl, 'BGP_Nexthop', 'ip_address', bgp_path['nexthop'])
-                if not row_nh:
-                    row_nh = txn.insert(self.idl.tables['BGP_Nexthop'])
-                    row_nh.ip_address = bgp_path['nexthop']
-                    row_nh.type = 'unicast'
-
-                row_path = txn.insert(self.idl.tables['BGP_Route'])
-                row_path.address_family = 'ipv4'
-                row_path.bgp_nexthops = row_nh
-                row_path.distance = []
-                row_path.metric = 0
-                row_path.path_attributes = bgp_path['bgp_pathattr']
-                row_path.peer = 'Remote announcement'
-                row_path.prefix = bgp_path['prefix']
-                row_path.sub_address_family = 'unicast'
-                row_path.vrf = self.idl.tables['VRF'].rows.values()[0]
-
-            status = txn.commit_block()
-            seqno = self.idl.change_seqno
-            if status == txn.TRY_AGAIN:
-                logger.log.error("OVSDB transaction returned TRY_AGAIN, retrying")
-                utils.wait_for_change(
-                    self.idl, self.timeout, seqno)
-                continue
-            elif status == txn.ERROR:
-                logger.log.error("OVSDB transaction returned ERROR: {0}".format(txn.get_error()))
-            elif status == txn.ABORTED:
-                logger.log.error("Transaction aborted")
-                return
-            elif status == txn.UNCHANGED:
-                logger.log.error("Transaction caused no change")
-
-            break
-
-        if operation is None:
-            logger.log.warn('route is not exist in ops: prefix={0}'.format(bgp_path['prefix']))
-        else:
-            logger.log.debug('Send bgp route to ops: type={0}, prefix={1}'.format(operation, bgp_path['prefix']))
+                logger.log.debug('Send bgp route to ops: type={0}, prefix={1}'.format(operation, bgp_path['prefix']))
+        txn = transaction.Transaction(commit_f)
+        result = txn.commit(self.conn)
+        logger.log.debug(result)
 
 
 def grpc_request(f):
@@ -314,7 +318,7 @@ class GobgpHandler():
                         if path_attr[0].type == 2:
                             bgp_pathattr['BGP_AS_path'] = '{0}'.format(path_attr[0].value[0][0])
                     elif isinstance(path_attr[0], BGPPathAttributeMultiExitDisc):
-                        bgp_path['metric'] = path_attr[0].value
+                        bgp_path['BGP_MED'] = path_attr[0].value
                     elif isinstance(path_attr[0], BGPPathAttributeNextHop):
                         bgp_path['nexthop'] = path_attr[0].value
                     elif isinstance(path_attr[0], BGPPathAttributeCommunities):
@@ -323,5 +327,4 @@ class GobgpHandler():
                             communities.append(community)
                         bgp_pathattr['BGP_Community'] = ','.join(communities)
                 bgp_path['bgp_pathattr'] = bgp_pathattr
-                bgp_path['is_withdraw'] = path.is_withdraw
                 self.o_hdr.mod_bgp_path(bgp_path)

@@ -21,42 +21,13 @@ import traceback
 from ovs.db import idl
 from ovs.unixctl.client import *
 from ovs import poller
-from six.moves import queue as Queue
 from grpc.beta import implementations
 
 import handle
 from lib import logger
 from lib import utils
+from lib import transaction
 from api import gobgp_pb2 as api
-
-AFI_IP = 1
-SAFI_UNICAST = 1
-RF_IPv4_UC = AFI_IP<<16 | SAFI_UNICAST
-
-
-class TransactionQueue(Queue.Queue, object):
-    def __init__(self, *args, **kwargs):
-        super(TransactionQueue, self).__init__(*args, **kwargs)
-        alertpipe = os.pipe()
-        self.alertin = os.fdopen(alertpipe[0], 'r', 0)
-        self.alertout = os.fdopen(alertpipe[1], 'w', 0)
-
-    def get_nowait(self, *args, **kwargs):
-        try:
-            result = super(TransactionQueue, self).get_nowait(*args, **kwargs)
-        except Queue.Empty:
-            return None
-        self.alertin.read(1)
-        return result
-
-    def put(self, *args, **kwargs):
-        super(TransactionQueue, self).put(*args, **kwargs)
-        self.alertout.write('X')
-        self.alertout.flush()
-
-    @property
-    def alert_fileno(self):
-        return self.alertin.fileno()
 
 
 class Connection(object):
@@ -105,7 +76,7 @@ class OpsConnection(Connection):
     def __init__(self, ovsdb):
         self.idl = None
         self.ovsdb = ovsdb
-        self.txns = TransactionQueue(1)
+        self.txns = transaction.TransactionQueue(1)
         self.lock = threading.Lock()
         self.schema_name = "OpenSwitch"
         super(OpsConnection, self).__init__()
@@ -123,7 +94,7 @@ class OpsConnection(Connection):
                 utils.wait_for_change(self.idl, self.timeout)
                 self.poller = poller.Poller()
 
-                self.o_hdr = handle.OpsHandler(self.idl)
+                self.o_hdr = handle.OpsHandler(self.idl, self)
             self.conn_f = conn
             super(OpsConnection, self).connect()
 
@@ -136,18 +107,13 @@ class OpsConnection(Connection):
         first_time = True
         while True:
             self.idl.txn = None
-            try:
-                self.idl.wait(self.poller)
-                self.poller.fd_wait(self.txns.alert_fileno, poller.POLLIN)
-                if not first_time:
-                    self.poller.block()
-                if self.idl.txn:
-                    self.idl.txn = None
-                self.idl.run()
+            self.idl.wait(self.poller)
+            self.poller.fd_wait(self.txns.alert_fileno, poller.POLLIN)
+            if not first_time:
+                self.poller.block()
+            self.idl.run()
 
-                self.o_hdr.handle_update()
-            except Exception as ex:
-                logger.log.warn(ex)
+            self.o_hdr.handle_update()
 
             txn = self.txns.get_nowait()
             if txn is not None:
@@ -191,7 +157,7 @@ class GobgpConnection(Connection):
     def run(self):
         while True:
             logger.log.info('Wait for a change the bestpath from gobgp...')
-            monitor_argument = {'rf': RF_IPv4_UC}
+            monitor_argument = {'rf': utils.RF_IPv4_UC}
             self.o_hdr.monitor_bestpath_chenged(monitor_argument)
             time.sleep(3)
         logger.log.info('run_ops_to_gogbp thread is end')
