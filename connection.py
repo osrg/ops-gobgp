@@ -59,16 +59,16 @@ class TransactionQueue(Queue.Queue, object):
         return self.alertin.fileno()
 
 
-class OpsConnection(object):
-    def __init__(self, ovsdb):
-        self.idl = None
-        self.ovsdb = ovsdb
+class Connection(object):
+    def __init__(self):
         self.timeout = 5
         self.retry_limit = 5
         self.wait_time = 3
-        self.txns = TransactionQueue(1)
-        self.lock = threading.Lock()
-        self.schema_name = "OpenSwitch"
+        self.o_hdr = None
+        self.poller =None
+        self.th = None
+        self.conn_f = None
+        signal.signal(signal.SIGINT, utils.receive_signal)
 
     def get_handler(self):
         return self.o_hdr
@@ -79,47 +79,75 @@ class OpsConnection(object):
         while not connected:
             if retry >= self.retry_limit:
                 os._exit(1)
+            try:
+                self.conn_f()
 
-            with self.lock:
-                if self.idl is not None:
-                    return
+                self.th = threading.Thread(target=self.run)
+                self.th.setDaemon(True)
+                logger.log.info('Connected')
+                connected = True
+            except Exception as e:
+                logger.log.error('Faild to connect: {0}'.format(e))
+                time.sleep(self.wait_time)
+                retry += 1
+
+        self.th = threading.Thread(target=self.run)
+        self.th.setDaemon(True)
+
+    def start(self):
+        self.th.start()
+
+    def run(self):
+        raise NotImplementedError
+
+
+class OpsConnection(Connection):
+    def __init__(self, ovsdb):
+        self.idl = None
+        self.ovsdb = ovsdb
+        self.txns = TransactionQueue(1)
+        self.lock = threading.Lock()
+        self.schema_name = "OpenSwitch"
+        super(OpsConnection, self).__init__()
+
+    def connect(self):
+        with self.lock:
+            if self.idl is not None:
+                return
+
+            def conn():
                 logger.log.info('Connecting to OpenSwitch...')
-                try:
-                    helper = utils.get_schema_helper(self.ovsdb, self.schema_name)
-                    helper.register_all()
-                    self.idl = idl.Idl(self.ovsdb, helper)
-                    utils.wait_for_change(self.idl, self.timeout)
-                    self.poller = poller.Poller()
+                helper = utils.get_schema_helper(self.ovsdb, self.schema_name)
+                helper.register_all()
+                self.idl = idl.Idl(self.ovsdb, helper)
+                utils.wait_for_change(self.idl, self.timeout)
+                self.poller = poller.Poller()
 
-                    self.o_hdr = handle.OpsHandler(self.idl)
-
-                    self.th = threading.Thread(target=self.run_ops_to_gogbp)
-                    self.th.setDaemon(True)
-                    logger.log.info('Connected')
-                    connected = True
-                except Exception as e:
-                    logger.log.error('Faild to connect: {0}'.format(e))
-                    time.sleep(self.wait_time)
-                    retry += 1
+                self.o_hdr = handle.OpsHandler(self.idl)
+            self.conn_f = conn
+            super(OpsConnection, self).connect()
 
     def start(self):
         logger.log.info('Run run_ops_to_gogbp thread...')
-        self.th.start()
+        super(OpsConnection, self).start()
         return self.th
 
-    def run_ops_to_gogbp(self):
+    def run(self):
         first_time = True
         while True:
             self.idl.txn = None
-            self.idl.wait(self.poller)
-            self.poller.fd_wait(self.txns.alert_fileno, poller.POLLIN)
-            if not first_time:
-                self.poller.block()
-            if self.idl.txn:
-                self.idl.txn = None
-            self.idl.run()
+            try:
+                self.idl.wait(self.poller)
+                self.poller.fd_wait(self.txns.alert_fileno, poller.POLLIN)
+                if not first_time:
+                    self.poller.block()
+                if self.idl.txn:
+                    self.idl.txn = None
+                self.idl.run()
 
-            self.o_hdr.handle_update()
+                self.o_hdr.handle_update()
+            except Exception as ex:
+                logger.log.warn(ex)
 
             txn = self.txns.get_nowait()
             if txn is not None:
@@ -136,84 +164,35 @@ class OpsConnection(object):
         self.txns.put(txn)
 
 
-class GobgpConnection():
+class GobgpConnection(Connection):
     def __init__(self, gobgp_url, gobgp_port):
         self.gobgp_url = gobgp_url
         self.gobgp_port = gobgp_port
         self.channel = implementations.insecure_channel(gobgp_url, gobgp_port)
-        self.wait_time = 3
-        self.retry_limit = 5
-
-    def get_handler(self):
-        return self.g_hdr
+        super(GobgpConnection, self).__init__()
 
     def connect(self):
-        g_conn = None
-        connected = False
-        retry = 0
-        if retry >= self.retry_limit:
-            os._exit(1)
-
-        while not connected:
+        def conn():
             logger.log.info('Connecting to Gobgp...')
-            try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.connect((self.gobgp_url, self.gobgp_port))
-                s.close()
-                g_conn = api.beta_create_GobgpApi_stub(self.channel)
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.connect((self.gobgp_url, self.gobgp_port))
+            s.close()
+            g_conn = api.beta_create_GobgpApi_stub(self.channel)
 
-                logger.log.info('Connected')
-                connected = True
-            except Exception as e:
-                logger.log.error('Faild to connect: {0}'.format(e))
-                time.sleep(self.wait_time)
-                retry += 1
-
-        self.g_hdr = handle.GobgpHandler(g_conn)
-
-        self.th = threading.Thread(target=self.run_gobgp_to_ops)
-        self.th.setDaemon(True)
+            self.o_hdr = handle.GobgpHandler(g_conn)
+        self.conn_f = conn
+        super(GobgpConnection, self).connect()
 
     def start(self):
         logger.log.info('Run run_gogbp_to_ops thread...')
-        self.th.start()
+        super(GobgpConnection, self).start()
         return self.th
 
-    def run_gobgp_to_ops(self):
+    def run(self):
         while True:
             logger.log.info('Wait for a change the bestpath from gobgp...')
             monitor_argument = {'rf': RF_IPv4_UC}
-            self.g_hdr.monitor_bestpath_chenged(monitor_argument)
+            self.o_hdr.monitor_bestpath_chenged(monitor_argument)
             time.sleep(3)
         logger.log.info('run_ops_to_gogbp thread is end')
 
-
-class Connection():
-    def __init__(self, ovsdb, gobgp_url, gobgp_port):
-        signal.signal(signal.SIGINT, utils.receive_signal)
-
-        # connection with each
-        self.ops = OpsConnection(ovsdb)
-        self.ops.connect()
-        self.gobgp = GobgpConnection(gobgp_url, gobgp_port)
-        self.gobgp.connect()
-
-        # get handler
-        o_hdr = self.ops.get_handler()
-        g_hdr = self.gobgp.get_handler()
-
-        # set each other's handler
-        self.ops.o_hdr.set_handler(g_hdr)
-        self.gobgp.g_hdr.set_handler(o_hdr)
-
-    def run(self):
-        # run thread
-        threads = []
-        threads.append(self.ops.start())
-        threads.append(self.gobgp.start())
-
-
-        for th in threads:
-            while th.isAlive():
-                time.sleep(1)
-            th.join()

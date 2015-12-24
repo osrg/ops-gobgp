@@ -191,6 +191,8 @@ class OpsHandler():
 
     def mod_bgp_path(self, bgp_path):
         operation = None
+        if self.idl.txn:
+            self.idl.txn = None
         while True:
             txn = idl.Transaction(self.idl)
             if bgp_path['is_withdraw']:
@@ -221,9 +223,7 @@ class OpsHandler():
                 row_path.sub_address_family = 'unicast'
                 row_path.vrf = self.idl.tables['VRF'].rows.values()[0]
 
-            logger.log.error('start commit')
             status = txn.commit_block()
-            logger.log.error('end commit')
             seqno = self.idl.change_seqno
             if status == txn.TRY_AGAIN:
                 logger.log.error("OVSDB transaction returned TRY_AGAIN, retrying")

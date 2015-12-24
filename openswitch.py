@@ -16,7 +16,7 @@
 from optparse import OptionParser
 
 from lib import logger
-from connection import Connection
+from connection import *
 
 
 def main():
@@ -42,8 +42,29 @@ def main():
     logger.log = log
     log.info('Run openswitch client')
 
-    conn = Connection(options.ovsdb, options.gobgp_url, options.gobgp_port)
-    conn.run()
+    # connection with each
+    ops = OpsConnection(options.ovsdb)
+    ops.connect()
+    gobgp = GobgpConnection(options.gobgp_url, options.gobgp_port)
+    gobgp.connect()
+
+    # get handler
+    ops_hdr = ops.get_handler()
+    gobgp_hdr = gobgp.get_handler()
+
+    # set each other's handler
+    ops.o_hdr.set_handler(gobgp_hdr)
+    gobgp.o_hdr.set_handler(ops_hdr)
+
+    # run thread
+    threads = []
+    threads.append(ops.start())
+    threads.append(gobgp.start())
+
+    for th in threads:
+        while th.isAlive():
+            time.sleep(1)
+        th.join()
 
 
 if __name__ == '__main__':
