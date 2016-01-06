@@ -155,7 +155,7 @@ class GobgpConnection(Connection):
     def run(self):
         while True:
             log.info('Wait for a change the bestpath from gobgp...')
-            monitor_argument = {'rf': utils.RF_IPv4_UC}
+            monitor_argument = {'family': utils.RF_IPv4_UC}
             self.hdr.monitor_bestpath_chenged(monitor_argument)
             time.sleep(3)
         log.info('run_ops_to_gogbp thread is end')

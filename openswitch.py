@@ -28,7 +28,7 @@ def main():
     parser = OptionParser(usage=usage)
     parser.add_option('-u', '--gobpg-url', dest='gobgp_url', default='127.0.0.1',
                       help='specifying an url')
-    parser.add_option('-p', '--gobgp-port', dest='gobgp_port', default=8080,
+    parser.add_option('-p', '--gobgp-port', dest='gobgp_port', default=50051,
                       help='specifying a port')
     parser.add_option('-o', '--ovsdb-sock', dest='ovsdb', default='unix:/var/run/openvswitch/db.sock',
                       help='specifying the connection destination of the ovsdb    '
@@ -48,7 +48,7 @@ def main():
     # connection with each
     ops = OpsConnection(options.ovsdb)
     ops.connect()
-    gobgp = GobgpConnection(options.gobgp_url, options.gobgp_port)
+    gobgp = GobgpConnection(options.gobgp_url, int(options.gobgp_port))
     gobgp.connect()
 
     # get handler
