@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
+import logging
 from ovs.db import idl
 from ryu.lib.packet.bgp import IPAddrPrefix
 from ryu.lib.packet.bgp import _PathAttribute
@@ -23,10 +23,11 @@ from ryu.lib.packet.bgp import BGPPathAttributeMultiExitDisc
 from ryu.lib.packet.bgp import BGPPathAttributeNextHop
 from ryu.lib.packet.bgp import BGPPathAttributeCommunities
 
-from lib import logger
 from lib import utils
 from lib import transaction
 from api import gobgp_pb2 as api
+
+log = logging.getLogger('handler')
 
 
 class OpsHandler():
@@ -53,12 +54,12 @@ class OpsHandler():
     def vrf_update(self):
         try:
             asn, uuid = self.get_bgp_router_uuid()
-            logger.log.debug('Recv global config from ops: as={0}, uuid={1}'.format(asn, uuid))
+            log.debug('Recv global config from ops: as={0}, uuid={1}'.format(asn, uuid))
         except Exception as e:
-            logger.log.warn('Exception: {0}'.format(e))
+            log.warn('Exception: {0}'.format(e))
             del_global_config_arguments = {'operation': api.DEL}
             self.g_hdr.mod_global_config(del_global_config_arguments)
-            logger.log.debug('Send global config to gobgp: type=del')
+            log.debug('Send global config to gobgp: type=del')
 
             self.router_id = None
             self.neighbors = []
@@ -70,9 +71,9 @@ class OpsHandler():
             return
         try:
             asn, uuid = self.get_bgp_router_uuid()
-            logger.log.debug('Recv global config from ops: as={0}, uuid={1}'.format(asn, uuid))
+            log.debug('Recv global config from ops: as={0}, uuid={1}'.format(asn, uuid))
         except Exception as e:
-            logger.log.warn('Exception: {0}'.format(e))
+            log.warn('Exception: {0}'.format(e))
             return
 
         # Register the router id
@@ -86,7 +87,7 @@ class OpsHandler():
                     'global': api.Global(**bgp_conf)
                 }
                 self.g_hdr.mod_global_config(add_global_config_arguments)
-                logger.log.debug('Send global config gogbp: type=add, router_id={0}'.format(router_id))
+                log.debug('Send global config gogbp: type=add, router_id={0}'.format(router_id))
                 self.router_id = router_id
             else:
                 if router_id == '0.0.0.0':
@@ -94,7 +95,7 @@ class OpsHandler():
                     del_global_config_arguments = {'operation': api.DEL}
                     self.g_hdr.mod_global_config(del_global_config_arguments)
 
-                    logger.log.debug('Send global config to gobgp: type=del')
+                    log.debug('Send global config to gobgp: type=del')
                     self.router_id = None
                 elif router_id != self.router_id:
                     # grpc request: change global config
@@ -105,16 +106,16 @@ class OpsHandler():
                     }
                     self.g_hdr.mod_global_config(mod_global_config_arguments)
 
-                    logger.log.debug('Send global config to gobgp: type=mod, router_id={0}'.format(router_id))
+                    log.debug('Send global config to gobgp: type=mod, router_id={0}'.format(router_id))
                     self.router_id = router_id
                 else:
-                    logger.log.info('Router id not change')
+                    log.info('Router id not change')
         else:
-            logger.log.info('Router id is not configured yet')
+            log.info('Router id is not configured yet')
 
         if len(self.neighbors) > 0:
             new_neighbors = utils.get_column_value(rows[0], 'bgp_neighbors')
-            logger.log.debug('Recv neighbor config from ops: neighbors={0}'.format(new_neighbors))
+            log.debug('Recv neighbor config from ops: neighbors={0}'.format(new_neighbors))
             for n in self.neighbors:
                 if n not in new_neighbors:
                     # grpc request: remove neighbor
@@ -124,7 +125,7 @@ class OpsHandler():
                         'peer': api.Peer(**peer_conf)
                     }
                     self.g_hdr.mod_neighbor_config(del_neighbor_config_arguments)
-                    logger.log.debug('Send neighbor config to gogbp: type=del, addrs={0}'.format(n))
+                    log.debug('Send neighbor config to gogbp: type=del, addrs={0}'.format(n))
             self.neighbors = new_neighbors.keys()
 
     def bgp_neighbor_update(self):
@@ -134,9 +135,9 @@ class OpsHandler():
 
         try:
             neighbors = self.get_bgp_neighbor_uuids()
-            logger.log.debug('Recv neighbor config from ops: neighbors={0}'.format(neighbors))
+            log.debug('Recv neighbor config from ops: neighbors={0}'.format(neighbors))
         except Exception as e:
-            logger.log.warn('Exception: {0}'.format(e))
+            log.warn('Exception: {0}'.format(e))
             return
 
         # Register the neighbor
@@ -154,7 +155,7 @@ class OpsHandler():
                         'peer': api.Peer(**peer_conf)
                     }
                     self.g_hdr.mod_neighbor_config(add_neighbor_config_arguments)
-                    logger.log.debug('Send neighbor config to gobgp: type=add, addr={0}, remote_as={1}'.format(nv, remote_ass[nk]))
+                    log.debug('Send neighbor config to gobgp: type=add, addr={0}, remote_as={1}'.format(nv, remote_ass[nk]))
 
             self.neighbors = neighbors.values()
 
@@ -227,27 +228,27 @@ class OpsHandler():
                 status = txn.commit_block()
                 seqno = self.idl.change_seqno
                 if status == txn.TRY_AGAIN:
-                    logger.log.error("OVSDB transaction returned TRY_AGAIN, retrying")
+                    log.error("OVSDB transaction returned TRY_AGAIN, retrying")
                     utils.wait_for_change(
                         self.idl, self.timeout, seqno)
                     continue
                 elif status == txn.ERROR:
-                    logger.log.error("OVSDB transaction returned ERROR: {0}".format(txn.get_error()))
+                    log.error("OVSDB transaction returned ERROR: {0}".format(txn.get_error()))
                 elif status == txn.ABORTED:
-                    logger.log.error("Transaction aborted")
+                    log.error("Transaction aborted")
                     return
                 elif status == txn.UNCHANGED:
-                    logger.log.error("Transaction caused no change")
+                    log.error("Transaction caused no change")
 
                 break
 
             if operation is None:
-                logger.log.warn('route is not exist in ops: prefix={0}'.format(bgp_path['prefix']))
+                log.warn('route is not exist in ops: prefix={0}'.format(bgp_path['prefix']))
             else:
-                logger.log.debug('Send bgp route to ops: type={0}, prefix={1}'.format(operation, bgp_path['prefix']))
+                log.debug('Send bgp route to ops: type={0}, prefix={1}'.format(operation, bgp_path['prefix']))
         txn = transaction.Transaction(commit_f)
         result = txn.commit(self.conn)
-        logger.log.debug(result)
+        log.debug(result)
 
 
 def grpc_request(f):
@@ -256,9 +257,9 @@ def grpc_request(f):
             f(*args)
         except Exception as e:
             if hasattr(e, 'details'):
-                logger.log.warn('faild grpc request: {0}'.format(e.details))
+                log.warn('faild grpc request: {0}'.format(e.details))
             else:
-                logger.log.warn('faild grpc request: {0}'.format(e))
+                log.warn('faild grpc request: {0}'.format(e))
     return wrapper
 
 
@@ -277,7 +278,7 @@ class GobgpHandler():
                 api.ModGlobalConfigArguments(**arguments),
                 self.timeout)
         if response:
-            logger.log.debug('grpc response: {0}'.format(response))
+            log.debug('grpc response: {0}'.format(response))
 
     @grpc_request
     def mod_neighbor_config(self, arguments):
@@ -285,17 +286,18 @@ class GobgpHandler():
             api.ModNeighborArguments(**arguments),
             self.timeout)
         if response:
-            logger.log.debug('grpc response: {0}'.format(response))
+            log.debug('grpc response: {0}'.format(response))
 
     @grpc_request
     def monitor_bestpath_chenged(self, arguments):
-        ribs = self.g_conn.MonitorBestChanged(api.Arguments(**arguments),
+        ribs = self.g_conn.MonitorBestChanged(
+            api.Arguments(**arguments),
             self.monitor_timeout)
         for rib in ribs:
             for path in rib.paths:
                 nlri = IPAddrPrefix.parser(path.nlri)
                 prefix = nlri[0].prefix
-                logger.log.debug('Recv bgp route from gobgp: prefix={0}, withdraw={1}'.format(prefix, path.is_withdraw))
+                log.debug('Recv bgp route from gobgp: prefix={0}, withdraw={1}'.format(prefix, path.is_withdraw))
                 bgp_path = {'prefix': prefix,
                             'metric': 0,
                             'is_withdraw': path.is_withdraw}

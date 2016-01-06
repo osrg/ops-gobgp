@@ -14,20 +14,21 @@
 # limitations under the License.
 
 import time
-import signal
 import socket
 import threading
 import traceback
+import logging
 from ovs.db import idl
 from ovs.unixctl.client import *
 from ovs import poller
 from grpc.beta import implementations
 
 import handle
-from lib import logger
 from lib import utils
 from lib import transaction
 from api import gobgp_pb2 as api
+
+log = logging.getLogger('connection')
 
 
 class Connection(object):
@@ -35,14 +36,12 @@ class Connection(object):
         self.timeout = 5
         self.retry_limit = 5
         self.wait_time = 3
-        self.o_hdr = None
-        self.poller =None
+        self.hdr = None
         self.th = None
         self.conn_f = None
-        signal.signal(signal.SIGINT, utils.receive_signal)
 
     def get_handler(self):
-        return self.o_hdr
+        return self.hdr
 
     def connect(self):
         connected = False
@@ -55,10 +54,10 @@ class Connection(object):
 
                 self.th = threading.Thread(target=self.run)
                 self.th.setDaemon(True)
-                logger.log.info('Connected')
+                log.info('Connected')
                 connected = True
             except Exception as e:
-                logger.log.error('Faild to connect: {0}'.format(e))
+                log.error('Faild to connect: {0}'.format(e))
                 time.sleep(self.wait_time)
                 retry += 1
 
@@ -75,31 +74,30 @@ class Connection(object):
 class OpsConnection(Connection):
     def __init__(self, ovsdb):
         self.idl = None
+        self.poller = None
         self.ovsdb = ovsdb
         self.txns = transaction.TransactionQueue(1)
-        self.lock = threading.Lock()
         self.schema_name = "OpenSwitch"
         super(OpsConnection, self).__init__()
 
     def connect(self):
-        with self.lock:
-            if self.idl is not None:
-                return
+        if self.idl is not None:
+            return
 
-            def conn():
-                logger.log.info('Connecting to OpenSwitch...')
-                helper = utils.get_schema_helper(self.ovsdb, self.schema_name)
-                helper.register_all()
-                self.idl = idl.Idl(self.ovsdb, helper)
-                utils.wait_for_change(self.idl, self.timeout)
-                self.poller = poller.Poller()
+        def conn():
+            log.info('Connecting to OpenSwitch...')
+            helper = utils.get_schema_helper(self.ovsdb, self.schema_name)
+            helper.register_all()
+            self.idl = idl.Idl(self.ovsdb, helper)
+            utils.wait_for_change(self.idl, self.timeout)
+            self.poller = poller.Poller()
 
-                self.o_hdr = handle.OpsHandler(self.idl, self)
-            self.conn_f = conn
-            super(OpsConnection, self).connect()
+            self.hdr = handle.OpsHandler(self.idl, self)
+        self.conn_f = conn
+        super(OpsConnection, self).connect()
 
     def start(self):
-        logger.log.info('Run run_ops_to_gogbp thread...')
+        log.info('Run run_ops_to_gogbp thread...')
         super(OpsConnection, self).start()
         return self.th
 
@@ -113,7 +111,7 @@ class OpsConnection(Connection):
                 self.poller.block()
             self.idl.run()
 
-            self.o_hdr.handle_update()
+            self.hdr.handle_update()
 
             txn = self.txns.get_nowait()
             if txn is not None:
@@ -124,7 +122,7 @@ class OpsConnection(Connection):
                     txn.results.put(er)
                 self.txns.task_done()
             first_time = False
-        logger.log.info('run_ops_to_gogbp thread is end')
+        log.info('run_ops_to_gogbp thread is end')
 
     def queue_txn(self, txn):
         self.txns.put(txn)
@@ -139,26 +137,25 @@ class GobgpConnection(Connection):
 
     def connect(self):
         def conn():
-            logger.log.info('Connecting to Gobgp...')
+            log.info('Connecting to Gobgp...')
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.connect((self.gobgp_url, self.gobgp_port))
             s.close()
             g_conn = api.beta_create_GobgpApi_stub(self.channel)
 
-            self.o_hdr = handle.GobgpHandler(g_conn)
+            self.hdr = handle.GobgpHandler(g_conn)
         self.conn_f = conn
         super(GobgpConnection, self).connect()
 
     def start(self):
-        logger.log.info('Run run_gogbp_to_ops thread...')
+        log.info('Run run_gogbp_to_ops thread...')
         super(GobgpConnection, self).start()
         return self.th
 
     def run(self):
         while True:
-            logger.log.info('Wait for a change the bestpath from gobgp...')
+            log.info('Wait for a change the bestpath from gobgp...')
             monitor_argument = {'rf': utils.RF_IPv4_UC}
-            self.o_hdr.monitor_bestpath_chenged(monitor_argument)
+            self.hdr.monitor_bestpath_chenged(monitor_argument)
             time.sleep(3)
-        logger.log.info('run_ops_to_gogbp thread is end')
-
+        log.info('run_ops_to_gogbp thread is end')

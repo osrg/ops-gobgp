@@ -17,10 +17,8 @@
 import sys
 import logging
 
-log = None
 
-
-def logger(log_level, log_file):
+def init_log(log_level, log_file):
     LEVELS = {'NOTSET': logging.NOTSET,
               'DEBUG': logging.DEBUG,
               'INFO': logging.INFO,
@@ -31,9 +29,9 @@ def logger(log_level, log_file):
               'CRITICAL': logging.CRITICAL}
 
     level = log_level.upper()
-    logger = logging.getLogger('openswitch')
+    log = logging.getLogger()
     if level in LEVELS:
-        logger.setLevel(LEVELS[level])
+        log.setLevel(LEVELS[level])
     else:
         print('> Not support entered log level')
         print('> enter the NOTSET, DEBUG, INFO, WARN, ERROR, FATAL, CRITICAL')
@@ -45,7 +43,4 @@ def logger(log_level, log_file):
     else:
         h = logging.FileHandler(log_file, 'a+', 'utf-8')
     h.setFormatter(formatter)
-    logger.addHandler(h)
-
-    return logger
-
+    log.addHandler(h)

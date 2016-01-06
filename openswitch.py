@@ -13,10 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import time
+import signal
 from optparse import OptionParser
 
-from lib import logger
-from connection import *
+from lib import log
+from lib import utils
+from connection import OpsConnection
+from connection import GobgpConnection
 
 
 def main():
@@ -38,9 +42,8 @@ def main():
 
     (options, args) = parser.parse_args()
 
-    log = logger.logger(options.log_level, options.log_file)
-    logger.log = log
-    log.info('Run openswitch client')
+    log.init_log(options.log_level, options.log_file)
+    signal.signal(signal.SIGINT, utils.receive_signal)
 
     # connection with each
     ops = OpsConnection(options.ovsdb)
@@ -53,8 +56,8 @@ def main():
     gobgp_hdr = gobgp.get_handler()
 
     # set each other's handler
-    ops.o_hdr.set_handler(gobgp_hdr)
-    gobgp.o_hdr.set_handler(ops_hdr)
+    ops.hdr.set_handler(gobgp_hdr)
+    gobgp.hdr.set_handler(ops_hdr)
 
     # run thread
     threads = []

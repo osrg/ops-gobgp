@@ -15,10 +15,12 @@
 
 
 import os
+import logging
 from six.moves import queue as Queue
 
 from lib import utils
-from lib import logger
+
+log = logging.getLogger('transaction')
 
 
 class TransactionQueue(Queue.Queue, object):
@@ -47,22 +49,16 @@ class TransactionQueue(Queue.Queue, object):
 
 
 class Transaction():
-    def __init__(self, commit_f, check_error=False, log_errors=False):
-        self.timeout = 5
-        self.check_error = check_error
-        self.log_errors = log_errors
-        self.commands = []
+    def __init__(self, commit_f):
         self.results = Queue.Queue(1)
         self.commit_f = commit_f
 
     def commit(self, conn):
         conn.queue_txn(self)
         result = self.results.get()
-        if self.check_error:
-            if isinstance(result, utils.ExceptionResult):
-                if self.log_errors:
-                    logger.log.error(result.tb)
-                raise result.ex
+        if isinstance(result, utils.ExceptionResult):
+            log.error(result.tb)
+            raise result.ex
         return result
 
     def do_commit(self):
